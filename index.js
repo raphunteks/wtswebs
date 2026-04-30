@@ -26,18 +26,17 @@ server.listen(port, () => {
 // ==========================================
 
 // ==========================================
-// ANTI-CRASH HANDLER (Diperkuat - Membungkam Bad MAC Spam)
+// ANTI-CRASH HANDLER (Diperkuat - Membungkam Semua Spam Error)
 // ==========================================
 process.on('uncaughtException', function (err) {
     let e = String(err);
-    if (e.includes('conflict') || e.includes('timeout') || e.includes('not-authorized') || e.includes('Bad MAC') || e.includes('EADDRINUSE') || e.includes('decrypt message') || e.includes('Session error')) return;
+    if (e.includes('conflict') || e.includes('timeout') || e.includes('not-authorized') || e.includes('Bad MAC') || e.includes('EADDRINUSE') || e.includes('decrypt message') || e.includes('Session error') || e.includes('Connection Closed') || e.includes('Precondition Required')) return;
     console.log('Caught exception: ', err);
 });
 
 process.on('unhandledRejection', function (reason, p) {
     let e = String(reason);
-    if (e.includes('conflict') || e.includes('timeout') || e.includes('not-authorized') || e.includes('Bad MAC') || e.includes('EADDRINUSE') || e.includes('decrypt message') || e.includes('Session error')) return;
-    // Hapus log ini jika tidak dibutuhkan, tetapi berguna untuk melihat error murni
+    if (e.includes('conflict') || e.includes('timeout') || e.includes('not-authorized') || e.includes('Bad MAC') || e.includes('EADDRINUSE') || e.includes('decrypt message') || e.includes('Session error') || e.includes('Connection Closed') || e.includes('Precondition Required')) return;
     if (e !== 'undefined') console.log('Unhandled Rejection at: Promise ', p, ' reason: ', reason);
 });
 // ==========================================
@@ -148,25 +147,57 @@ async function connectToWhatsApp() {
         }
     });
 
-    if (usePairingCode && !sock.authState.creds.registered) {
-        setTimeout(async () => {
+    let pairingCodeRequested = false; // Flag mencegah spam request kode
+
+    // ==========================================
+    // EVENT: CONNECTION UPDATE (TERMASUK REQUEST PAIRING CODE)
+    // ==========================================
+    sock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect, qr } = update;
+
+        // FOOLPROOF FIX: Hanya minta kode HANYA JIKA socket sudah matang dan mengirim QR
+        if (qr && usePairingCode && !sock.authState.creds.registered && !pairingCodeRequested) {
+            pairingCodeRequested = true; // Tandai agar tidak request ganda
             try {
-                const code = await sock.requestPairingCode(phoneNumber);
-                console.log(`\n====================================================`);
-                console.log(`🔑 KODE PAIRING ANDA: ${code}`);
-                console.log(`====================================================`);
-                console.log(`Cara Login:`);
-                console.log(`1. Buka WhatsApp di HP Anda (Nomor Bot).`);
-                console.log(`2. Ketuk ikon titik tiga (Opsi lainnya) > Perangkat Tertaut.`);
-                console.log(`3. Ketuk 'Tautkan Perangkat'.`);
-                console.log(`4. Pilih 'Tautkan dengan nomor telepon saja'.`);
-                console.log(`5. Masukkan kode 8 digit di atas.`);
-                console.log(`====================================================\n`);
+                // Jeda 1.5 detik ekstra untuk memastikan server WhatsApp siap 100%
+                setTimeout(async () => {
+                    const code = await sock.requestPairingCode(phoneNumber);
+                    console.log(`\n====================================================`);
+                    console.log(`🔑 KODE PAIRING ANDA: ${code}`);
+                    console.log(`====================================================`);
+                    console.log(`Cara Login:`);
+                    console.log(`1. Buka WhatsApp di HP Anda (Nomor Bot).`);
+                    console.log(`2. Ketuk ikon titik tiga (Opsi lainnya) > Perangkat Tertaut.`);
+                    console.log(`3. Ketuk 'Tautkan Perangkat'.`);
+                    console.log(`4. Pilih 'Tautkan dengan nomor telepon saja'.`);
+                    console.log(`5. Masukkan kode 8 digit di atas.`);
+                    console.log(`====================================================\n`);
+                }, 1500);
             } catch (err) {
-                console.error('Gagal meminta kode pairing. Sesi mungkin bentrok.', err);
+                console.error('❌ Gagal meminta kode pairing:', err);
+                pairingCodeRequested = false; // Reset jika gagal agar bisa mengulang
             }
-        }, 3000);
-    }
+        }
+
+        if (connection === 'close') {
+            pairingCodeRequested = false; // Reset flag saat putus
+            
+            const statusCode = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            
+            console.log(`Koneksi terputus. Status Code: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+            
+            if (shouldReconnect) {
+                setTimeout(() => connectToWhatsApp(), 3000);
+            } else {
+                console.log('❌ Perangkat telah dikeluarkan (Logged Out) secara manual.');
+                clearZombieSession();
+                setTimeout(() => connectToWhatsApp(), 3000);
+            }
+        } else if (connection === 'open') {
+            console.log('✅ Bot berhasil terhubung ke WhatsApp!');
+        }
+    });
 
     // ==========================================
     // SISTEM AUTO-SEND JADWAL (Interval Loop)
@@ -199,26 +230,6 @@ async function connectToWhatsApp() {
             saveSchedules();
         }
     }, 30000); // Mengecek jadwal setiap 30 detik
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            
-            console.log(`Koneksi terputus. Status Code: ${statusCode}. Reconnecting: ${shouldReconnect}`);
-            
-            if (shouldReconnect) {
-                setTimeout(() => connectToWhatsApp(), 3000);
-            } else {
-                console.log('❌ Perangkat telah dikeluarkan (Logged Out) secara manual.');
-                clearZombieSession();
-                setTimeout(() => connectToWhatsApp(), 3000);
-            }
-        } else if (connection === 'open') {
-            console.log('✅ Bot berhasil terhubung ke WhatsApp!');
-        }
-    });
 
     sock.ev.on('creds.update', saveCreds);
 
