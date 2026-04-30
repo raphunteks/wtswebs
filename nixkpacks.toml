@@ -1,0 +1,4 @@
+# File ini memberitahu sistem build Railway (Nixpacks) 
+# untuk menginstal ffmpeg agar fitur !sticker berfungsi
+[phases.setup]
+aptPkgs = ["ffmpeg", "webp"]
