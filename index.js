@@ -26,18 +26,19 @@ server.listen(port, () => {
 // ==========================================
 
 // ==========================================
-// ANTI-CRASH HANDLER (Diperkuat)
+// ANTI-CRASH HANDLER (Diperkuat - Membungkam Bad MAC Spam)
 // ==========================================
 process.on('uncaughtException', function (err) {
     let e = String(err);
-    if (e.includes('conflict') || e.includes('timeout') || e.includes('not-authorized') || e.includes('Bad MAC') || e.includes('EADDRINUSE')) return;
+    if (e.includes('conflict') || e.includes('timeout') || e.includes('not-authorized') || e.includes('Bad MAC') || e.includes('EADDRINUSE') || e.includes('decrypt message') || e.includes('Session error')) return;
     console.log('Caught exception: ', err);
 });
 
 process.on('unhandledRejection', function (reason, p) {
     let e = String(reason);
-    if (e.includes('conflict') || e.includes('timeout') || e.includes('not-authorized') || e.includes('Bad MAC') || e.includes('EADDRINUSE')) return;
-    console.log('Unhandled Rejection at: Promise ', p, ' reason: ', reason);
+    if (e.includes('conflict') || e.includes('timeout') || e.includes('not-authorized') || e.includes('Bad MAC') || e.includes('EADDRINUSE') || e.includes('decrypt message') || e.includes('Session error')) return;
+    // Hapus log ini jika tidak dibutuhkan, tetapi berguna untuk melihat error murni
+    if (e !== 'undefined') console.log('Unhandled Rejection at: Promise ', p, ' reason: ', reason);
 });
 // ==========================================
 
@@ -295,7 +296,6 @@ async function connectToWhatsApp() {
 
                 // --- FITUR AUTO SCHEDULE MESSAGE ---
                 case 'addjadwal':
-                    // Format Target: !addjadwal 01-05-2026 10:30 | 628123456 | Halo ini pesan otomatis
                     const jadwalArgs = args.join(' ').split('|').map(s => s.trim());
                     
                     if (jadwalArgs.length < 3) {
@@ -309,9 +309,8 @@ async function connectToWhatsApp() {
                     }
 
                     const [waktuInput, targetInput, ...pesanArr] = jadwalArgs;
-                    const pesanTeks = pesanArr.join(' | '); // Gabung kembali jika ada tanda | di dalam teks pesan
+                    const pesanTeks = pesanArr.join(' | ');
                     
-                    // Parsing Waktu DD-MM-YYYY HH:mm ke zona WITA (UTC+08:00)
                     const waktuSplit = waktuInput.split(' ');
                     if (waktuSplit.length !== 2) {
                         await sock.sendMessage(sender, { text: `⚠️ *Format Tanggal/Jam Salah!*\n\nHarus persis seperti ini: DD-MM-YYYY HH:mm\nContoh: 31-12-2026 23:59` }, { quoted: msg });
@@ -326,7 +325,6 @@ async function connectToWhatsApp() {
                         break;
                     }
 
-                    // Format standar ISO untuk parsing: YYYY-MM-DDTHH:mm:00+08:00
                     const isoString = `${thn}-${bln}-${tgl}T${jamMnt}:00+08:00`;
                     const timestampWITA = Date.parse(isoString);
 
@@ -335,14 +333,12 @@ async function connectToWhatsApp() {
                         break;
                     }
 
-                    // Format Nomor Tujuan
                     let finalTarget = targetInput;
                     if (!finalTarget.includes('@')) {
-                        // Jika hanya angka biasa, asumsikan itu chat pribadi
                         finalTarget = finalTarget.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
                     }
 
-                    const jadwalId = Math.floor(Math.random() * 900000 + 100000).toString(); // ID 6 digit random
+                    const jadwalId = Math.floor(Math.random() * 900000 + 100000).toString(); 
                     const newJadwal = {
                         id: jadwalId,
                         waktu: waktuInput,
