@@ -33,7 +33,7 @@ process.on('unhandledRejection', function (reason, p) {
 // ==========================================
 // PENGATURAN BOT
 // ==========================================
-const phoneNumber = "6285338922586"; // NOMOR BARU DIPERBARUI
+const phoneNumber = "6285338922586"; // NOMOR TERBARU
 const usePairingCode = true;
 const botStartTime = new Date(); 
 
@@ -175,7 +175,7 @@ async function connectToWhatsApp() {
                     if (isBesok) targetDate.setDate(targetDate.getDate() + 1);
                     const dateWITA = targetDate.toLocaleDateString('sv-SE', { timeZone: 'Asia/Makassar' }); 
                     
-                    // URL dengan filter ganda (Tanggal & Jenis)
+                    // URL Fetch Vercel API
                     const response = await fetch(`https://ishiprsud.vercel.app/api/${endpointName}?tanggal=${dateWITA}&jenis=${jenisScrape}`);
                     const result = await response.json();
 
@@ -255,7 +255,6 @@ async function connectToWhatsApp() {
                     } catch (error) { await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel.*' }, { quoted: msg }); }
                     break;
 
-                // Fitur Add/List/Del Jadwal & Ping/Runtime tetap sama (saya persingkat visualnya agar rapi)
                 case 'ping':
                     await sock.sendMessage(sender, { text: `🏓 *Pong!*\n⚡ *Kecepatan:* ${Date.now() - (msg.messageTimestamp * 1000)} ms` }, { quoted: msg });
                     break;
