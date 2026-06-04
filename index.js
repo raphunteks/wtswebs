@@ -33,7 +33,7 @@ process.on('unhandledRejection', function (reason, p) {
 // ==========================================
 // PENGATURAN BOT
 // ==========================================
-const phoneNumber = "6285338922586"; // NOMOR TERBARU
+const phoneNumber = "6285256739684"; // NOMOR TERBARU
 const usePairingCode = true;
 const botStartTime = new Date(); 
 
