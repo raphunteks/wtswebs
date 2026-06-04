@@ -154,13 +154,11 @@ async function connectToWhatsApp() {
 
             console.log(`[COMMAND] ${command} dari ${sender}`);
 
-            // SMART COMMAND DETECTOR UNTUK RAWAT JALAN
             const isRajal = command.startsWith('cekrajal');
 
             if (isRajal) {
                 await sock.sendMessage(sender, { text: `⏳ _Sedang mengambil data rawat jalan dari server..._` }, { quoted: msg });
                 try {
-                    // Deteksi Kata Kunci
                     const isEndo = command.includes('endo');
                     const isRiwayat = command.includes('riwayat');
                     const isAntrian = command.includes('antrianpx');
@@ -175,7 +173,6 @@ async function connectToWhatsApp() {
                     if (isBesok) targetDate.setDate(targetDate.getDate() + 1);
                     const dateWITA = targetDate.toLocaleDateString('sv-SE', { timeZone: 'Asia/Makassar' }); 
                     
-                    // URL Fetch Vercel API
                     const response = await fetch(`https://ishiprsud.vercel.app/api/${endpointName}?tanggal=${dateWITA}&jenis=${jenisScrape}`);
                     const result = await response.json();
 
@@ -204,7 +201,7 @@ async function connectToWhatsApp() {
                     console.error(`Error fetching ${command}:`, error);
                     await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel.*\nPastikan Ekstensi Auto-Scrape di PC menyala.' }, { quoted: msg });
                 }
-                return; // Stop eksekusi agar tidak lanjut ke switch lain
+                return; 
             }
 
             switch (command) {
@@ -224,12 +221,30 @@ async function connectToWhatsApp() {
                                      `* !cekrajalriwayatbmbsk*\n` +
                                      `* !cekrajalrantrianpxbmbsk*\n\n` +
                                      `*⚙️ SISTEM & LAINNYA:*\n` +
+                                     `* !refresh* - 🔄 Paksa Ekstensi Scrape Sekarang!\n` +
                                      `* !addjadwal* - Tambah auto-send\n` +
                                      `* !listjadwal* - Lihat auto-send\n` +
                                      `* !deljadwal <id>* - Hapus auto-send\n` +
                                      `* !ping* - Cek ping bot\n` +
                                      `* !runtime* - Cek sistem info`;
                     await sock.sendMessage(sender, { text: menuText }, { quoted: msg });
+                    break;
+
+                // ==========================================
+                // FITUR TRIGGER MANUAL DARI WA BOT
+                // ==========================================
+                case 'refresh':
+                    await sock.sendMessage(sender, { text: '⏳ _Mengirim sinyal refresh ke Ekstensi Chrome..._' }, { quoted: msg });
+                    try {
+                        await fetch('https://ishiprsud.vercel.app/api/trigger', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ refresh: true })
+                        });
+                        await sock.sendMessage(sender, { text: '✅ *Sinyal terkirim!*\n\nEkstensi Chrome di PC Anda akan mendeteksinya dalam waktu 20 detik dan langsung melakukan tarikan data baru.' }, { quoted: msg });
+                    } catch (e) {
+                        await sock.sendMessage(sender, { text: '❌ *Gagal mengirim sinyal ke Vercel.*' }, { quoted: msg });
+                    }
                     break;
 
                 case 'jadwalranap':
