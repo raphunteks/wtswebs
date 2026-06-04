@@ -42,16 +42,14 @@ process.on('unhandledRejection', function (reason, p) {
 // ==========================================
 
 // ==========================================
-// PENGATURAN BOT, SISTEM SETTING & JADWAL
+// PENGATURAN BOT & JADWAL
 // ==========================================
 const phoneNumber = "6285256739684"; 
 const usePairingCode = true;
 const botStartTime = new Date(); // Mencatat waktu script dijalankan
 
 const sessionPath = './session';
-const settingsFile = `${sessionPath}/settings.json`;
 const schedulesFile = `${sessionPath}/schedules.json`; // File database jadwal
-let botSettings = { welcome: true, leave: true };
 let botSchedules = [];
 
 // Buat folder session jika belum ada
@@ -59,20 +57,12 @@ if (!fs.existsSync(sessionPath)) {
     fs.mkdirSync(sessionPath, { recursive: true });
 }
 
-// Load setting jika file sudah ada
-if (fs.existsSync(settingsFile)) {
-    try { botSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')); } catch (e) { }
-}
-
 // Load schedules jika file sudah ada
 if (fs.existsSync(schedulesFile)) {
     try { botSchedules = JSON.parse(fs.readFileSync(schedulesFile, 'utf-8')); } catch (e) { }
 }
 
-// Fungsi untuk menyimpan perubahan setting & jadwal
-function saveSettings() {
-    fs.writeFileSync(settingsFile, JSON.stringify(botSettings, null, 2));
-}
+// Fungsi untuk menyimpan perubahan jadwal
 function saveSchedules() {
     fs.writeFileSync(schedulesFile, JSON.stringify(botSchedules, null, 2));
 }
@@ -84,8 +74,8 @@ function clearZombieSession() {
     console.log('\n⚠️ MENGHAPUS SESI LAMA YANG LOGOUT/KORUP...');
     if (fs.existsSync(sessionPath)) {
         fs.readdirSync(sessionPath).forEach(file => {
-            // Hapus file KECUALI settings & schedules agar data tidak hilang
-            if (file !== 'settings.json' && file !== 'schedules.json') {
+            // Hapus file KECUALI schedules agar data jadwal tidak hilang
+            if (file !== 'schedules.json') {
                 try { fs.unlinkSync(`${sessionPath}/${file}`); } catch (e) {}
             }
         });
@@ -234,35 +224,6 @@ async function connectToWhatsApp() {
     sock.ev.on('creds.update', saveCreds);
 
     // ==========================================
-    // EVENT: WELCOME & LEAVE MESSAGE
-    // ==========================================
-    sock.ev.on('group-participants.update', async (update) => {
-        const { id, participants, action } = update;
-        
-        try {
-            const groupMetadata = await sock.groupMetadata(id);
-            const groupName = groupMetadata.subject;
-
-            for (const participant of participants) {
-                let ppUrl;
-                try { ppUrl = await sock.profilePictureUrl(participant, 'image'); } 
-                catch { ppUrl = 'https://upload.wikimedia.org/wikipedia/commons/thumb/2/2c/Default_pfp.svg/1200px-Default_pfp.svg.png'; }
-
-                if (action === 'add' && botSettings.welcome) {
-                    const welcomeText = `Halo @${participant.split('@')[0]}! 👋\n\nSelamat datang di grup *${groupName}*.\nJangan lupa perkenalkan diri dan baca deskripsi grup ya!`;
-                    await sock.sendMessage(id, { image: { url: ppUrl }, caption: welcomeText, mentions: [participant] });
-                } 
-                else if (action === 'remove' && botSettings.leave) {
-                    const leaveText = `Selamat tinggal @${participant.split('@')[0]} 👋\n\nSemoga sukses selalu di luar sana.`;
-                    await sock.sendMessage(id, { image: { url: ppUrl }, caption: leaveText, mentions: [participant] });
-                }
-            }
-        } catch (error) {
-            console.error('Error pada Welcome/Leave handler:', error);
-        }
-    });
-
-    // ==========================================
     // EVENT: COMMAND HANDLER (PESAN MASUK)
     // ==========================================
     sock.ev.on('messages.upsert', async (m) => {
@@ -289,7 +250,7 @@ async function connectToWhatsApp() {
                 case 'help':
                     const menuText = `*🤖 BOT MENU 🤖*\n\n` +
                                      `* !menu* - Menampilkan menu ini\n` +
-                                     `* !setting* - Lihat status fitur bot\n` +
+                                     `* !jadwalranap* - Cek jadwal pasien rawat inap\n` +
                                      `* !ai <teks>* - Tanya AI\n` +
                                      `* !sticker* - Buat stiker\n` +
                                      `* !ping* - Cek status bot\n` +
@@ -298,11 +259,52 @@ async function connectToWhatsApp() {
                                      `*🗓️ Jadwal Otomatis (Auto-Send):*\n` +
                                      `* !addjadwal* - Tambah jadwal pesan baru\n` +
                                      `* !listjadwal* - Lihat antrean pesan terjadwal\n` +
-                                     `* !deljadwal <id>* - Hapus pesan terjadwal\n\n` +
-                                     `*⚙️ Pengaturan Admin:*\n` +
-                                     `* !welcome on/off* - Atur pesan selamat datang\n` +
-                                     `* !leave on/off* - Atur pesan keluar`;
+                                     `* !deljadwal <id>* - Hapus pesan terjadwal`;
                     await sock.sendMessage(sender, { text: menuText }, { quoted: msg });
+                    break;
+
+                // ==========================================
+                // FITUR BARU: GET DATA JADWAL RANAP (DARI VERCEL API)
+                // ==========================================
+                case 'jadwalranap':
+                    await sock.sendMessage(sender, { text: '⏳ _Sedang mengambil data jadwal rawat inap dari server..._' }, { quoted: msg });
+                    
+                    try {
+                        // Melakukan Fetch ke API Vercel Anda
+                        const response = await fetch('https://ishiprsud.vercel.app/api/jadwal');
+                        const result = await response.json();
+
+                        if (!result.status || result.data.length === 0) {
+                            const errMsgs = result.message || '📭 *Tidak ada data jadwal pasien rawat inap saat ini.*';
+                            await sock.sendMessage(sender, { text: errMsgs }, { quoted: msg });
+                            break;
+                        }
+
+                        // Format Balasan Pesan WA
+                        let replyTxt = `🏥 *MANIFEST PASIEN RAWAT INAP*\n\n`;
+                        replyTxt += `📊 *Total Pasien:* ${result.total_data}\n`;
+                        replyTxt += `⏱️ *Update Terakhir:* ${result.last_updated || 'Terbaru'}\n\n`;
+
+                        result.data.forEach((p, i) => {
+                            replyTxt += `*${i + 1}. ${p.nama_pasien}*\n`;
+                            replyTxt += ` 🛏️ Ruang: ${p.ruangan} (${p.no_kamar})\n`;
+                            replyTxt += ` 🆔 RM: ${p.no_rm} | Usia: ${p.usia}\n`;
+                            replyTxt += ` 👨‍⚕️ DPJP: ${p.dpjp_utama}\n`;
+                            if (p.dokter_rawat_bersama !== '-') {
+                                replyTxt += ` 👨‍⚕️ Bersama: ${p.dokter_rawat_bersama}\n`;
+                            }
+                            replyTxt += ` 🗓️ Masuk: ${p.tanggal_masuk}\n`;
+                            replyTxt += ` ⏳ Lama Rawat: ${p.lama_rawat}\n\n`;
+                        });
+
+                        replyTxt += `_Data disinkronkan otomatis dari Ekstensi Chrome._`;
+
+                        await sock.sendMessage(sender, { text: replyTxt }, { quoted: msg });
+
+                    } catch (error) {
+                        console.error('Error fetching jadwal ranap API:', error);
+                        await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel.*\nPastikan Ekstensi Auto-Scrape di PC sedang berjalan.' }, { quoted: msg });
+                    }
                     break;
 
                 // --- FITUR AUTO SCHEDULE MESSAGE ---
@@ -408,39 +410,6 @@ async function connectToWhatsApp() {
                     }
                     break;
                 // --------------------------
-
-                case 'setting':
-                case 'settings':
-                    const settingText = `⚙️ *PENGATURAN BOT*\n\n` +
-                                        `👋 Welcome Msg : ${botSettings.welcome ? '✅ ON' : '❌ OFF'}\n` +
-                                        `🚪 Leave Msg   : ${botSettings.leave ? '✅ ON' : '❌ OFF'}\n\n` +
-                                        `_Ketik !welcome off atau !leave off untuk mematikan._`;
-                    await sock.sendMessage(sender, { text: settingText }, { quoted: msg });
-                    break;
-
-                case 'welcome':
-                    if (args[0] === 'on') {
-                        botSettings.welcome = true; saveSettings();
-                        await sock.sendMessage(sender, { text: '✅ Fitur Welcome Message berhasil DIAKTIFKAN!' }, { quoted: msg });
-                    } else if (args[0] === 'off') {
-                        botSettings.welcome = false; saveSettings();
-                        await sock.sendMessage(sender, { text: '❌ Fitur Welcome Message telah DINONAKTIFKAN!' }, { quoted: msg });
-                    } else {
-                        await sock.sendMessage(sender, { text: '⚠️ Format salah. Gunakan: *!welcome on* atau *!welcome off*' }, { quoted: msg });
-                    }
-                    break;
-
-                case 'leave':
-                    if (args[0] === 'on') {
-                        botSettings.leave = true; saveSettings();
-                        await sock.sendMessage(sender, { text: '✅ Fitur Leave Message berhasil DIAKTIFKAN!' }, { quoted: msg });
-                    } else if (args[0] === 'off') {
-                        botSettings.leave = false; saveSettings();
-                        await sock.sendMessage(sender, { text: '❌ Fitur Leave Message telah DINONAKTIFKAN!' }, { quoted: msg });
-                    } else {
-                        await sock.sendMessage(sender, { text: '⚠️ Format salah. Gunakan: *!leave on* atau *!leave off*' }, { quoted: msg });
-                    }
-                    break;
 
                 case 'ping':
                     const messageTime = msg.messageTimestamp * 1000;
