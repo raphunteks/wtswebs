@@ -44,7 +44,7 @@ process.on('unhandledRejection', function (reason, p) {
 // ==========================================
 // PENGATURAN BOT & JADWAL
 // ==========================================
-const phoneNumber = "6285256739684"; 
+const phoneNumber = "6285338922586"; 
 const usePairingCode = true;
 const botStartTime = new Date(); // Mencatat waktu script dijalankan
 
