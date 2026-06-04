@@ -10,6 +10,7 @@ import handleAiCommand from './src/commands/ai.js';
 import handleStickerCommand from './src/commands/sticker.js';
 
 const logger = pino({ level: 'silent' }); 
+const ownerNumber = "6285256739684@s.whatsapp.net"; // Nomor Owner
 
 const port = process.env.PORT || 3000;
 const server = http.createServer((req, res) => {
@@ -42,21 +43,15 @@ const schedulesFile = `${sessionPath}/schedules.json`;
 const settingsFile = `${sessionPath}/settings.json`; 
 
 let botSchedules = [];
-// Pengaturan target grup untuk Auto Info
 let botSettings = { autoRanap: [], autoRajal: [] };
 
 if (!fs.existsSync(sessionPath)) fs.mkdirSync(sessionPath, { recursive: true });
 
-// Memuat Jadwal
 if (fs.existsSync(schedulesFile)) {
     try { botSchedules = JSON.parse(fs.readFileSync(schedulesFile, 'utf-8')); } catch (e) { }
 }
-// Memuat Pengaturan (Untuk Auto Info Grup)
 if (fs.existsSync(settingsFile)) {
-    try { 
-        const loaded = JSON.parse(fs.readFileSync(settingsFile, 'utf-8')); 
-        botSettings = { ...botSettings, ...loaded };
-    } catch (e) { }
+    try { botSettings = { ...botSettings, ...JSON.parse(fs.readFileSync(settingsFile, 'utf-8')) }; } catch (e) { }
 }
 
 function saveSchedules() { fs.writeFileSync(schedulesFile, JSON.stringify(botSchedules, null, 2)); }
@@ -66,7 +61,6 @@ function clearZombieSession() {
     console.log('\n⚠️ MENGHAPUS SESI LAMA YANG LOGOUT/KORUP...');
     if (fs.existsSync(sessionPath)) {
         fs.readdirSync(sessionPath).forEach(file => {
-            // Jangan hapus data jadwal dan setting
             if (file !== 'schedules.json' && file !== 'settings.json') {
                 try { fs.unlinkSync(`${sessionPath}/${file}`); } catch (e) {}
             }
@@ -76,13 +70,13 @@ function clearZombieSession() {
 }
 
 function getRelativeTime(seconds) {
-    const m = Math.floor(seconds / 60);
-    const h = Math.floor(seconds / 3600);
-    const d = Math.floor(seconds / 86400);
-    if (d > 0) return `${d} days ago`;
-    if (h > 0) return `${h} hours ago`;
-    if (m > 0) return `${m} minutes ago`;
+    const m = Math.floor(seconds / 60); const h = Math.floor(seconds / 3600); const d = Math.floor(seconds / 86400);
+    if (d > 0) return `${d} days ago`; if (h > 0) return `${h} hours ago`; if (m > 0) return `${m} minutes ago`;
     return `${Math.floor(seconds)} seconds ago`;
+}
+
+function formatWITA(dateObj) {
+    return new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Makassar', weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: 'numeric', minute: 'numeric', hour12: true }).format(dateObj);
 }
 
 // ==========================================
@@ -105,21 +99,24 @@ function getDifferences(oldList, newList) {
 
 async function checkApiUpdates(sock) {
     try {
-        // 1. Cek Auto Info RAWAT INAP
+        // Cek apakah ada Notifikasi Log Out / Login dari Chrome Ekstensi
+        const resTrigger = await fetch('https://ishiprsud.vercel.app/api/trigger');
+        const dataTrigger = await resTrigger.json();
+        if (dataTrigger.notify && dataTrigger.notify.trim() !== "") {
+            await sock.sendMessage(ownerNumber, { text: dataTrigger.notify });
+        }
+
+        // Cek Auto Info RAWAT INAP
         if (botSettings.autoRanap.length > 0) {
             const resRanap = await fetch('https://ishiprsud.vercel.app/api/jadwalranap');
             const dataRanap = await resRanap.json();
             
             if (dataRanap.status) {
                 const currentRanap = dataRanap.data || [];
-                
-                // Pastikan bukan tarikan pertama saat bot baru nyala (agar tidak spam)
                 if (lastRanapData !== null) {
                     const { added, removed } = getDifferences(lastRanapData, currentRanap);
-                    
                     if (added.length > 0 || removed.length > 0) {
                         let msg = `🏥 *AUTO INFO: RAWAT INAP*\n_Mendeteksi perubahan data manifest._\n\n`;
-                        
                         if (added.length > 0) {
                             msg += `🟢 *PASIEN MASUK/BARU (${added.length}):*\n`;
                             added.forEach((p, i) => msg += ` ${i+1}. ${p.nama_pasien} (RM: ${p.no_rm})\n    🛏️ ${p.ruangan}\n`);
@@ -131,139 +128,97 @@ async function checkApiUpdates(sock) {
                             msg += `\n`;
                         }
                         msg += `📊 *Total Saat Ini:* ${currentRanap.length} Pasien`;
-                        
-                        // Kirim ke semua grup yang menyalakan fitur ini
-                        for (const jid of botSettings.autoRanap) {
-                            await sock.sendMessage(jid, { text: msg });
-                        }
+                        for (const jid of botSettings.autoRanap) await sock.sendMessage(jid, { text: msg });
                     }
                 }
                 lastRanapData = currentRanap;
             }
         }
 
-        // 2. Cek Auto Info RAWAT JALAN (Hari Ini)
+        // Cek Auto Info RAWAT JALAN (Hari Ini)
         if (botSettings.autoRajal.length > 0) {
-            const targetDate = new Date();
-            const dateWITA = targetDate.toLocaleDateString('sv-SE', { timeZone: 'Asia/Makassar' }); 
-
+            const dateWITA = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Makassar' }); 
             const resEndo = await fetch(`https://ishiprsud.vercel.app/api/jadwalrajalendo?tanggal=${dateWITA}`);
-            const dataEndo = await resEndo.json();
-            const currentEndo = dataEndo.status ? (dataEndo.data || []) : [];
+            const currentEndo = (await resEndo.json()).data || [];
 
             const resBM = await fetch(`https://ishiprsud.vercel.app/api/jadwalrajalbm?tanggal=${dateWITA}`);
-            const dataBM = await resBM.json();
-            const currentBM = dataBM.status ? (dataBM.data || []) : [];
+            const currentBM = (await resBM.json()).data || [];
 
-            // Pastikan bukan tarikan pertama
             if (lastRajalEndoData !== null && lastRajalBMData !== null) {
                 const diffEndo = getDifferences(lastRajalEndoData, currentEndo);
                 const diffBM = getDifferences(lastRajalBMData, currentBM);
-
                 const hasEndoDiff = diffEndo.added.length > 0 || diffEndo.removed.length > 0;
                 const hasBMDiff = diffBM.added.length > 0 || diffBM.removed.length > 0;
 
                 if (hasEndoDiff || hasBMDiff) {
                     let msg = `🏥 *AUTO INFO: RAWAT JALAN*\n_Perubahan antrean tanggal ${dateWITA}._\n\n`;
-
                     if (hasEndoDiff) {
                         msg += `🦷 *Klinik Endodonsi:*\n`;
                         if (diffEndo.added.length > 0) msg += ` 🟢 Tambah: ${diffEndo.added.map(p => p.nama_pasien).join(', ')}\n`;
                         if (diffEndo.removed.length > 0) msg += ` 🔴 Selesai/Batal: ${diffEndo.removed.map(p => p.nama_pasien).join(', ')}\n`;
                         msg += `\n`;
                     }
-
                     if (hasBMDiff) {
                         msg += `💉 *Klinik Bedah Mulut:*\n`;
                         if (diffBM.added.length > 0) msg += ` 🟢 Tambah: ${diffBM.added.map(p => p.nama_pasien).join(', ')}\n`;
                         if (diffBM.removed.length > 0) msg += ` 🔴 Selesai/Batal: ${diffBM.removed.map(p => p.nama_pasien).join(', ')}\n`;
                         msg += `\n`;
                     }
-
                     msg += `📊 *Total Antrean (Hari Ini):* Endo (${currentEndo.length}), BM (${currentBM.length})`;
-
-                    for (const jid of botSettings.autoRajal) {
-                        await sock.sendMessage(jid, { text: msg });
-                    }
+                    for (const jid of botSettings.autoRajal) await sock.sendMessage(jid, { text: msg });
                 }
             }
             lastRajalEndoData = currentEndo;
             lastRajalBMData = currentBM;
         }
-
-    } catch (e) {
-        // Abaikan jika server Vercel sedang timeout agar bot tidak crash
-    }
+    } catch (e) { }
 }
 
-// ==========================================
-
-let schedulerInterval; 
-let autoInfoInterval;
+let schedulerInterval, autoInfoInterval;
 
 async function connectToWhatsApp() {
     console.log('🔄 Memulai koneksi ke WhatsApp...');
     const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const { version, isLatest } = await fetchLatestBaileysVersion();
+    const { version } = await fetchLatestBaileysVersion();
     
     const sock = makeWASocket({
         version, logger, printQRInTerminal: !usePairingCode,
-        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger), },
-        browser: Browsers.ubuntu('Chrome'), 
-        generateHighQualityLinkPreview: true, syncFullHistory: false, markOnlineOnConnect: true,
-        getMessage: async (key) => ({ conversation: 'Bot is running' })
+        auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, logger) },
+        browser: Browsers.ubuntu('Chrome'), markOnlineOnConnect: true,
+        getMessage: async () => ({ conversation: 'Bot is running' })
     });
 
     let pairingCodeRequested = false; 
 
     sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
-
         if (qr && usePairingCode && !sock.authState.creds.registered && !pairingCodeRequested) {
             pairingCodeRequested = true; 
-            try {
-                setTimeout(async () => {
-                    const code = await sock.requestPairingCode(phoneNumber);
-                    console.log(`\n🔑 KODE PAIRING ANDA: ${code}\n`);
-                }, 1500);
-            } catch (err) {
-                console.error('❌ Gagal meminta kode pairing:', err);
-                pairingCodeRequested = false; 
-            }
+            setTimeout(async () => { console.log(`\n🔑 KODE PAIRING ANDA: ${await sock.requestPairingCode(phoneNumber)}\n`); }, 1500);
         }
-
         if (connection === 'close') {
             pairingCodeRequested = false; 
             const statusCode = lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(() => connectToWhatsApp(), 3000);
+            if (statusCode !== DisconnectReason.loggedOut) setTimeout(() => connectToWhatsApp(), 3000);
             else { clearZombieSession(); setTimeout(() => connectToWhatsApp(), 3000); }
         } else if (connection === 'open') {
             console.log('✅ Bot berhasil terhubung ke WhatsApp!');
         }
     });
 
-    // Scheduler Broadcast
     if (schedulerInterval) clearInterval(schedulerInterval);
     schedulerInterval = setInterval(async () => {
-        const now = Date.now();
-        let hasChanges = false;
+        const now = Date.now(); let hasChanges = false;
         for (let i = 0; i < botSchedules.length; i++) {
             const jadwal = botSchedules[i];
             if (jadwal.status === 'pending' && now >= jadwal.timestamp) {
-                try {
-                    await sock.sendMessage(jadwal.target, { text: jadwal.pesan });
-                    jadwal.status = 'sent'; hasChanges = true;
-                } catch (err) { jadwal.status = 'failed'; hasChanges = true; }
+                try { await sock.sendMessage(jadwal.target, { text: jadwal.pesan }); jadwal.status = 'sent'; hasChanges = true; } 
+                catch (err) { jadwal.status = 'failed'; hasChanges = true; }
             }
         }
-        if (hasChanges) {
-            botSchedules = botSchedules.filter(s => s.status === 'pending');
-            saveSchedules();
-        }
+        if (hasChanges) { botSchedules = botSchedules.filter(s => s.status === 'pending'); saveSchedules(); }
     }, 30000); 
 
-    // Auto Info API Checker (Tiap 60 Detik)
     if (autoInfoInterval) clearInterval(autoInfoInterval);
     autoInfoInterval = setInterval(() => checkApiUpdates(sock), 60000);
 
@@ -275,8 +230,7 @@ async function connectToWhatsApp() {
             if (!msg.message || msg.key.fromMe || msg.key.remoteJid === 'status@broadcast') return;
 
             const text = msg.message.conversation || msg.message.extendedTextMessage?.text || msg.message.imageMessage?.caption || msg.message.videoMessage?.caption || '';
-            const prefix = '!';
-            if (!text.startsWith(prefix)) return;
+            const prefix = '!'; if (!text.startsWith(prefix)) return;
 
             const args = text.slice(prefix.length).trim().split(/ +/);
             const command = args.shift().toLowerCase();
@@ -289,9 +243,9 @@ async function connectToWhatsApp() {
             if (isRajal) {
                 await sock.sendMessage(sender, { text: `⏳ _Sedang mengambil data rawat jalan dari server..._` }, { quoted: msg });
                 try {
-                    const isEndo = command.includes('endo');
+                    const isEndo = command.includes('endo'); 
                     const isRiwayat = command.includes('riwayat');
-                    const isAntrian = command.includes('antrianpx');
+                    const isAntrian = command.includes('antrianpx'); 
                     const isBesok = command.endsWith('bsk');
 
                     const endpointName = isEndo ? 'jadwalrajalendo' : 'jadwalrajalbm';
@@ -299,7 +253,7 @@ async function connectToWhatsApp() {
                     const namaPoli = isEndo ? 'ENDODONSI' : 'BEDAH MULUT';
                     const namaJenis = isRiwayat ? 'Riwayat Antrian' : 'Antrian Pasien';
                     
-                    let targetDate = new Date();
+                    let targetDate = new Date(); 
                     if (isBesok) targetDate.setDate(targetDate.getDate() + 1);
                     const dateWITA = targetDate.toLocaleDateString('sv-SE', { timeZone: 'Asia/Makassar' }); 
                     
@@ -359,13 +313,11 @@ async function connectToWhatsApp() {
                                      `* !listjadwal* - Lihat auto-send\n` +
                                      `* !deljadwal <id>* - Hapus auto-send\n` +
                                      `* !ping* - Cek ping bot\n` +
-                                     `* !runtime* - Cek sistem info`;
+                                     `* !runtime* - Cek sistem info\n` +
+                                     `* !tagall* - Tag semua member grup\n`;
                     await sock.sendMessage(sender, { text: menuText }, { quoted: msg });
                     break;
 
-                // ==========================================
-                // FITUR AUTO INFO TOGGLE
-                // ==========================================
                 case 'autoranap':
                     if (args[0] === 'on') {
                         if (!botSettings.autoRanap.includes(sender)) botSettings.autoRanap.push(sender);
@@ -431,18 +383,184 @@ async function connectToWhatsApp() {
                         await sock.sendMessage(sender, { text: replyTxt }, { quoted: msg });
                     } catch (error) { await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel.*' }, { quoted: msg }); }
                     break;
+                    
+                // ==========================================
+                // FITUR PENJADWALAN PESAN (RESTORED)
+                // ==========================================
+                case 'addjadwal':
+                    const jadwalArgs = args.join(' ').split('|').map(s => s.trim());
+                    
+                    if (jadwalArgs.length < 3) {
+                        const panduan = `⚠️ *Format Pembuatan Jadwal Salah!*\n\n` +
+                                        `Gunakan pemisah tanda palang ( | ) antara waktu, nomor tujuan, dan pesannya.\n\n` +
+                                        `*Format:*\n!addjadwal DD-MM-YYYY HH:mm | Nomor/GrupID | Pesan\n\n` +
+                                        `*Contoh untuk nomor:* \n!addjadwal 01-05-2026 10:30 | 6281234567890 | Halo bos!\n\n` +
+                                        `*Contoh untuk grup:* \n!addjadwal 01-05-2026 14:00 | 123456-123456@g.us | Info rapat guys!`;
+                        await sock.sendMessage(sender, { text: panduan }, { quoted: msg });
+                        break;
+                    }
+
+                    const [waktuInput, targetInput, ...pesanArr] = jadwalArgs;
+                    const pesanTeks = pesanArr.join(' | ');
+                    
+                    const waktuSplit = waktuInput.split(' ');
+                    if (waktuSplit.length !== 2) {
+                        await sock.sendMessage(sender, { text: `⚠️ *Format Tanggal/Jam Salah!*\n\nHarus persis seperti ini: DD-MM-YYYY HH:mm\nContoh: 31-12-2026 23:59` }, { quoted: msg });
+                        break;
+                    }
+
+                    const [tgl, bln, thn] = waktuSplit[0].split('-');
+                    const jamMnt = waktuSplit[1];
+
+                    if (!tgl || !bln || !thn || !jamMnt) {
+                        await sock.sendMessage(sender, { text: `⚠️ *Format Tanggal/Jam Salah!*\n\nHarus persis seperti ini: DD-MM-YYYY HH:mm\nContoh: 31-12-2026 23:59` }, { quoted: msg });
+                        break;
+                    }
+
+                    const isoString = `${thn}-${bln}-${tgl}T${jamMnt}:00+08:00`;
+                    const timestampWITA = Date.parse(isoString);
+
+                    if (isNaN(timestampWITA)) {
+                        await sock.sendMessage(sender, { text: `⚠️ *Format Tanggal/Jam Tidak Valid!*\n\nPastikan angka tanggal dan jam benar.\nContoh: 31-12-2026 23:59` }, { quoted: msg });
+                        break;
+                    }
+
+                    let finalTarget = targetInput;
+                    if (!finalTarget.includes('@')) {
+                        finalTarget = finalTarget.replace(/[^0-9]/g, '') + '@s.whatsapp.net';
+                    }
+
+                    const jadwalId = Math.floor(Math.random() * 900000 + 100000).toString(); 
+                    const newJadwal = {
+                        id: jadwalId,
+                        waktu: waktuInput,
+                        timestamp: timestampWITA,
+                        target: finalTarget,
+                        pesan: pesanTeks,
+                        status: 'pending'
+                    };
+
+                    botSchedules.push(newJadwal);
+                    saveSchedules();
+
+                    const suksesMsg = `✅ *Jadwal Berhasil Ditambahkan!*\n\n` +
+                                      `🔖 *ID:* ${newJadwal.id}\n` +
+                                      `⏰ *Waktu:* ${newJadwal.waktu} WITA\n` +
+                                      `🎯 *Tujuan:* ${targetInput}\n` +
+                                      `💬 *Pesan:* ${newJadwal.pesan.substring(0, 50)}${newJadwal.pesan.length > 50 ? '...' : ''}`;
+                    await sock.sendMessage(sender, { text: suksesMsg }, { quoted: msg });
+                    break;
+
+                case 'listjadwal':
+                    const pendingSchedules = botSchedules.filter(s => s.status === 'pending');
+                    
+                    if (pendingSchedules.length === 0) {
+                        await sock.sendMessage(sender, { text: '📭 *Tidak ada jadwal antrean pesan yang aktif saat ini.*' }, { quoted: msg });
+                        break;
+                    }
+
+                    let listTxt = `🗓️ *DAFTAR ANTREAN JADWAL*\n\n`;
+                    pendingSchedules.forEach((j, i) => {
+                        listTxt += `*${i+1}. [ID: ${j.id}]*\n` +
+                                   ` ⏰ ${j.waktu} WITA\n` +
+                                   ` 🎯 Ke: ${j.target.split('@')[0]}\n` +
+                                   ` 💬 Psn: ${j.pesan.substring(0, 30)}...\n\n`;
+                    });
+                    listTxt += `_Ketik !deljadwal <ID> untuk membatalkan pesan._`;
+                    
+                    await sock.sendMessage(sender, { text: listTxt }, { quoted: msg });
+                    break;
+
+                case 'deljadwal':
+                    if (!args[0]) {
+                        await sock.sendMessage(sender, { text: '⚠️ *Masukkan ID jadwal yang mau dibatalkan/dihapus.*\nContoh: !deljadwal 123456' }, { quoted: msg });
+                        break;
+                    }
+                    
+                    const hapusId = args[0];
+                    const idx = botSchedules.findIndex(s => s.id === hapusId);
+                    
+                    if (idx !== -1) {
+                        botSchedules.splice(idx, 1);
+                        saveSchedules();
+                        await sock.sendMessage(sender, { text: `🗑️ *Jadwal dengan ID ${hapusId} berhasil dibatalkan dan dihapus!*` }, { quoted: msg });
+                    } else {
+                        await sock.sendMessage(sender, { text: `❌ *Jadwal dengan ID ${hapusId} tidak ditemukan di antrean.*` }, { quoted: msg });
+                    }
+                    break;
+
+                // ==========================================
+                // FITUR SYSTEM INFO & LAINNYA (RESTORED)
+                // ==========================================
+                case 'runtime':
+                    const uptimeSec = process.uptime();
+                    const rHours = Math.floor(uptimeSec / 3600).toString().padStart(2, '0');
+                    const rMinutes = Math.floor((uptimeSec % 3600) / 60).toString().padStart(2, '0');
+                    const rSeconds = Math.floor(uptimeSec % 60).toString().padStart(2, '0');
+                    
+                    const formattedUptime = `${rHours}:${rMinutes}:${rSeconds}`;
+                    const relativeText = getRelativeTime(uptimeSec);
+                    const startTimeString = formatWITA(botStartTime);
+
+                    const memUsage = process.memoryUsage();
+                    const rssMB = (memUsage.rss / 1024 / 1024).toFixed(2);
+                    const heapMB = (memUsage.heapUsed / 1024 / 1024).toFixed(2);
+
+                    const osType = os.type();
+                    const osRelease = os.release();
+                    const osPlatform = os.platform();
+                    const osArch = os.arch();
+                    const cpus = os.cpus();
+                    const cpuModel = cpus[0]?.model.trim() || 'Unknown CPU';
+                    const cpuSpeed = cpus[0]?.speed || 0;
+                    const totalRamGB = (os.totalmem() / 1024 / 1024 / 1024).toFixed(2);
+                    const freeRamGB = (os.freemem() / 1024 / 1024 / 1024).toFixed(2);
+
+                    let groupCount = 0;
+                    try {
+                        const groups = await sock.groupFetchAllParticipating();
+                        groupCount = Object.keys(groups).length;
+                    } catch (e) {
+                        groupCount = 'Error';
+                    }
+
+                    const runtimeReply = `⏱️ *Runtime Bot*\n` +
+                                         `• Uptime      : ${formattedUptime} (sejak ${relativeText})\n` +
+                                         `• Start Time  : ${startTimeString} WITA\n` +
+                                         `• Guilds      : ${groupCount}\n` +
+                                         `• Node.js     : ${process.version}\n` +
+                                         `• Memory (RSS): ${rssMB} MB\n` +
+                                         `• Heap Used   : ${heapMB} MB\n\n` +
+                                         `🖥️ *Spesifikasi Core VPS*\n` +
+                                         `• OS          : ${osType} ${osRelease} (${osPlatform}/${osArch})\n` +
+                                         `• CPU         : ${cpuModel}\n` +
+                                         `• CPU Cores   : ${cpus.length} cores @ ${cpuSpeed} MHz\n` +
+                                         `• RAM (Total) : ${totalRamGB} GB\n` +
+                                         `• RAM (Free)  : ${freeRamGB} GB`;
+
+                    await sock.sendMessage(sender, { text: runtimeReply }, { quoted: msg });
+                    break;
+
+                case 'tagall':
+                    if (!sender.endsWith('@g.us')) return;
+                    const groupMetadata = await sock.groupMetadata(sender);
+                    const tagParticipants = groupMetadata.participants.map(p => p.id);
+                    let mentionText = `*📢 PERHATIAN SEMUA 📢*\n\n`;
+                    tagParticipants.forEach(p => mentionText += `👉 @${p.split('@')[0]}\n`);
+                    await sock.sendMessage(sender, { text: mentionText, mentions: tagParticipants }, { quoted: msg });
+                    break;
 
                 case 'ping':
-                    await sock.sendMessage(sender, { text: `🏓 *Pong!*\n⚡ *Kecepatan:* ${Date.now() - (msg.messageTimestamp * 1000)} ms` }, { quoted: msg });
+                    await sock.sendMessage(sender, { text: `🏓 *Pong!*\n⚡ *Kecepatan:* ${Date.now() - (msg.messageTimestamp * 1000)} ms` }, { quoted: msg }); 
                     break;
-
-                case 'ai':
-                    await handleAiCommand(sock, msg, args);
+                    
+                case 'ai': 
+                    await handleAiCommand(sock, msg, args); 
                     break;
-
-                case 'sticker':
-                case 's':
-                    await handleStickerCommand(sock, msg);
+                    
+                case 'sticker': 
+                case 's': 
+                    await handleStickerCommand(sock, msg); 
                     break;
             }
         } catch (error) { console.error('Error proses pesan:', error); }
