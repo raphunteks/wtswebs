@@ -251,6 +251,10 @@ async function connectToWhatsApp() {
                     const menuText = `*🤖 BOT MENU 🤖*\n\n` +
                                      `* !menu* - Menampilkan menu ini\n` +
                                      `* !jadwalranap* - Cek jadwal pasien rawat inap\n` +
+                                     `* !jadwalrajalendo* - Cek jadwal Endodonsi (Hari Ini)\n` +
+                                     `* !jadwalrajalendobesok* - Cek jadwal Endodonsi (Besok)\n` +
+                                     `* !jadwalrajalbm* - Cek jadwal Bedah Mulut (Hari Ini)\n` +
+                                     `* !jadwalrajalbmbesok* - Cek jadwal Bedah Mulut (Besok)\n` +
                                      `* !ai <teks>* - Tanya AI\n` +
                                      `* !sticker* - Buat stiker\n` +
                                      `* !ping* - Cek status bot\n` +
@@ -264,14 +268,13 @@ async function connectToWhatsApp() {
                     break;
 
                 // ==========================================
-                // FITUR BARU: GET DATA JADWAL RANAP (DARI VERCEL API)
+                // FITUR LAMA: GET DATA JADWAL RANAP (RAWAT INAP)
                 // ==========================================
                 case 'jadwalranap':
                     await sock.sendMessage(sender, { text: '⏳ _Sedang mengambil data jadwal rawat inap dari server..._' }, { quoted: msg });
                     
                     try {
-                        // Melakukan Fetch ke API Vercel Anda
-                        const response = await fetch('https://ishiprsud.vercel.app/api/jadwal');
+                        const response = await fetch('https://ishiprsud.vercel.app/api/jadwalranap');
                         const result = await response.json();
 
                         if (!result.status || result.data.length === 0) {
@@ -280,7 +283,6 @@ async function connectToWhatsApp() {
                             break;
                         }
 
-                        // Format Balasan Pesan WA
                         let replyTxt = `🏥 *MANIFEST PASIEN RAWAT INAP*\n\n`;
                         replyTxt += `📊 *Total Pasien:* ${result.total_data}\n`;
                         replyTxt += `⏱️ *Update Terakhir:* ${result.last_updated || 'Terbaru'}\n\n`;
@@ -298,11 +300,61 @@ async function connectToWhatsApp() {
                         });
 
                         replyTxt += `_Data disinkronkan otomatis dari Ekstensi Chrome._`;
-
                         await sock.sendMessage(sender, { text: replyTxt }, { quoted: msg });
 
                     } catch (error) {
                         console.error('Error fetching jadwal ranap API:', error);
+                        await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel.*\nPastikan Ekstensi Auto-Scrape di PC sedang berjalan.' }, { quoted: msg });
+                    }
+                    break;
+
+                // ==========================================
+                // FITUR BARU: GET DATA JADWAL RAJAL (ENDODONSI & BEDAH MULUT)
+                // ==========================================
+                case 'jadwalrajalendo':
+                case 'jadwalrajalendobesok':
+                case 'jadwalrajalbm':
+                case 'jadwalrajalbmbesok':
+                    await sock.sendMessage(sender, { text: `⏳ _Sedang mengambil data jadwal rawat jalan dari server..._` }, { quoted: msg });
+                    
+                    try {
+                        const isEndo = command.includes('endo');
+                        const isBesok = command.includes('besok');
+                        const endpointName = isEndo ? 'jadwalrajalendo' : 'jadwalrajalbm';
+                        const namaPoli = isEndo ? 'ENDODONSI' : 'BEDAH MULUT';
+                        
+                        let targetDate = new Date();
+                        // Jika command adalah "besok", tambah 1 hari
+                        if (isBesok) targetDate.setDate(targetDate.getDate() + 1);
+                        const dateWITA = targetDate.toLocaleDateString('sv-SE', { timeZone: 'Asia/Makassar' }); // Format Output YYYY-MM-DD
+                        
+                        // Menambahkan filter tanggal saat menarik API Vercel
+                        const response = await fetch(`https://ishiprsud.vercel.app/api/${endpointName}?tanggal=${dateWITA}`);
+                        const result = await response.json();
+
+                        if (!result.status || result.data.length === 0) {
+                            await sock.sendMessage(sender, { text: `📭 *Tidak ada jadwal antrean pasien ${namaPoli} untuk tanggal ${dateWITA}.*` }, { quoted: msg });
+                            break;
+                        }
+
+                        let replyTxt = `🏥 *ANTRIAN RAWAT JALAN (${namaPoli})*\n📅 *Tanggal Kunjungan:* ${dateWITA}\n\n`;
+                        replyTxt += `📊 *Total Pasien:* ${result.total_data}\n`;
+                        replyTxt += `⏱️ *Update Terakhir:* ${result.last_updated || 'Terbaru'}\n\n`;
+
+                        result.data.forEach((p, i) => {
+                            replyTxt += `*${i + 1}. ${p.nama_pasien}*\n`;
+                            replyTxt += ` 🆔 RM: ${p.no_rm}\n`;
+                            replyTxt += ` ⏰ Kunjungan: ${p.tanggal_kunjungan}\n`;
+                            replyTxt += ` 👨‍⚕️ Dokter: ${p.dokter}\n`;
+                            replyTxt += ` 🏷️ Penjamin: ${p.penjamin}\n`;
+                            replyTxt += ` 📌 Status: ${p.status}\n\n`;
+                        });
+
+                        replyTxt += `_Data disinkronkan otomatis dari Ekstensi Chrome._`;
+                        await sock.sendMessage(sender, { text: replyTxt }, { quoted: msg });
+
+                    } catch (error) {
+                        console.error(`Error fetching ${command}:`, error);
                         await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel.*\nPastikan Ekstensi Auto-Scrape di PC sedang berjalan.' }, { quoted: msg });
                     }
                     break;
