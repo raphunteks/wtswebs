@@ -12,6 +12,9 @@ import handleStickerCommand from './src/commands/sticker.js';
 const logger = pino({ level: 'silent' }); 
 const ownerNumber = "6285256739684@s.whatsapp.net"; // Nomor Owner
 
+// API GOOGLE APPS SCRIPT FALLBACK
+const GAS_URL = "https://script.google.com/macros/s/AKfycbzhDou1e-e4QXDILWfM_mkyagViYOvcpLLv7xL-kJ6cVhpR_R5_bVICdnUYxp0AA90/exec";
+
 const port = process.env.PORT || 3000;
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
@@ -80,6 +83,58 @@ function formatWITA(dateObj) {
 }
 
 // ==========================================
+// FUNGSI PINTAR: FETCH WITH FALLBACK (VERCEL -> GAS)
+// ==========================================
+async function fetchWithFallback(endpointName, queryParams = "") {
+    try {
+        // 1. Coba Tarik dari Vercel
+        const vercelUrl = `https://ishiprsud.vercel.app/api/${endpointName}${queryParams ? '?' + queryParams : ''}`;
+        const res = await fetch(vercelUrl);
+        const data = await res.json();
+        
+        // Vercel dianggap sukses HANYA jika data tidak kosong
+        if (data.status && data.data && data.data.length > 0) return data;
+        
+        throw new Error("Vercel Kosong/Down");
+    } catch (e) {
+        console.log(`[API Fallback] Vercel gagal/kosong untuk ${endpointName}, memanggil Google Sheets API...`);
+        
+        // 2. Fallback Tarik dari Google Apps Script
+        try {
+            const gasUrl = `${GAS_URL}?type=${endpointName}`;
+            const gasRes = await fetch(gasUrl);
+            const gasData = await gasRes.json();
+            
+            if (gasData.status && gasData.data) {
+                let finalData = gasData.data;
+                
+                // Bot melakukan penyaringan tanggal secara lokal jika ada parameter `tanggal`
+                if (queryParams.includes('tanggal=')) {
+                    const tglMatch = queryParams.match(/tanggal=([^&]+)/);
+                    if (tglMatch) {
+                        const [y, m, d] = tglMatch[1].split('-');
+                        const fmt = `${d}-${m}-${y}`; 
+                        finalData = finalData.filter(i => 
+                            (i.tanggal_masuk && i.tanggal_masuk.includes(fmt)) || 
+                            (i.tanggal_kunjungan && i.tanggal_kunjungan.includes(fmt))
+                        );
+                    }
+                }
+                
+                gasData.data = finalData;
+                gasData.total_data = finalData.length;
+                return gasData;
+            }
+        } catch (err) {
+            console.log(`[API Fallback] GAS juga gagal untuk ${endpointName}`);
+        }
+        
+        // Return kosong jika dua-duanya gagal
+        return { status: false, data: [] };
+    }
+}
+
+// ==========================================
 // SMART DIFF ALGORITHM (Mendeteksi Perubahan Data)
 // ==========================================
 let lastRanapData = null;
@@ -108,8 +163,7 @@ async function checkApiUpdates(sock) {
 
         // Cek Auto Info RAWAT INAP
         if (botSettings.autoRanap.length > 0) {
-            const resRanap = await fetch('https://ishiprsud.vercel.app/api/jadwalranap');
-            const dataRanap = await resRanap.json();
+            const dataRanap = await fetchWithFallback('Ranap');
             
             if (dataRanap.status) {
                 const currentRanap = dataRanap.data || [];
@@ -138,11 +192,12 @@ async function checkApiUpdates(sock) {
         // Cek Auto Info RAWAT JALAN (Hari Ini)
         if (botSettings.autoRajal.length > 0) {
             const dateWITA = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Makassar' }); 
-            const resEndo = await fetch(`https://ishiprsud.vercel.app/api/jadwalrajalendo?tanggal=${dateWITA}`);
-            const currentEndo = (await resEndo.json()).data || [];
+            
+            const dataEndo = await fetchWithFallback('RajalEndo_AntrianPx', `tanggal=${dateWITA}`);
+            const currentEndo = dataEndo.data || [];
 
-            const resBM = await fetch(`https://ishiprsud.vercel.app/api/jadwalrajalbm?tanggal=${dateWITA}`);
-            const currentBM = (await resBM.json()).data || [];
+            const dataBM = await fetchWithFallback('RajalBM_AntrianPx', `tanggal=${dateWITA}`);
+            const currentBM = dataBM.data || [];
 
             if (lastRajalEndoData !== null && lastRajalBMData !== null) {
                 const diffEndo = getDifferences(lastRajalEndoData, currentEndo);
@@ -248,8 +303,14 @@ async function connectToWhatsApp() {
                     const isAntrian = command.includes('antrianpx'); 
                     const isBesok = command.endsWith('bsk');
 
-                    const endpointName = isEndo ? 'jadwalrajalendo' : 'jadwalrajalbm';
-                    const jenisScrape = isRiwayat ? 'riwayat' : (isAntrian ? 'antrian' : '');
+                    // Tentukan Endpoint API yang sesuai
+                    let endpointName = '';
+                    if (isEndo && isAntrian) endpointName = 'RajalEndo_AntrianPx';
+                    else if (isEndo && isRiwayat) endpointName = 'RajalEndo_RiwayatAntrianPx';
+                    else if (!isEndo && isAntrian) endpointName = 'RajalBM_AntrianPx';
+                    else if (!isEndo && isRiwayat) endpointName = 'RajalBM_RiwayatAntrianPx';
+                    else endpointName = isEndo ? 'RajalEndo_AntrianPx' : 'RajalBM_AntrianPx';
+
                     const namaPoli = isEndo ? 'ENDODONSI' : 'BEDAH MULUT';
                     const namaJenis = isRiwayat ? 'Riwayat Antrian' : 'Antrian Pasien';
                     
@@ -257,8 +318,8 @@ async function connectToWhatsApp() {
                     if (isBesok) targetDate.setDate(targetDate.getDate() + 1);
                     const dateWITA = targetDate.toLocaleDateString('sv-SE', { timeZone: 'Asia/Makassar' }); 
                     
-                    const response = await fetch(`https://ishiprsud.vercel.app/api/${endpointName}?tanggal=${dateWITA}&jenis=${jenisScrape}`);
-                    const result = await response.json();
+                    // Tarik Data menggunakan Fallback Cerdas
+                    const result = await fetchWithFallback(endpointName, `tanggal=${dateWITA}`);
 
                     if (!result.status || result.data.length === 0) {
                         await sock.sendMessage(sender, { text: `📭 *Tidak ada data ${namaJenis} ${namaPoli} untuk tanggal ${dateWITA}.*` }, { quoted: msg });
@@ -283,7 +344,7 @@ async function connectToWhatsApp() {
 
                 } catch (error) {
                     console.error(`Error fetching ${command}:`, error);
-                    await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel.*\nPastikan Ekstensi Auto-Scrape di PC menyala.' }, { quoted: msg });
+                    await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel maupun Google Sheets.*\nPastikan Ekstensi Auto-Scrape di PC menyala.' }, { quoted: msg });
                 }
                 return; 
             }
@@ -363,8 +424,8 @@ async function connectToWhatsApp() {
                 case 'jadwalranap':
                     await sock.sendMessage(sender, { text: '⏳ _Sedang mengambil data jadwal rawat inap dari server..._' }, { quoted: msg });
                     try {
-                        const response = await fetch('https://ishiprsud.vercel.app/api/jadwalranap');
-                        const result = await response.json();
+                        // Tarik Data Rawat Inap menggunakan Fallback Cerdas
+                        const result = await fetchWithFallback('Ranap');
 
                         if (!result.status || result.data.length === 0) {
                             await sock.sendMessage(sender, { text: result.message || '📭 *Tidak ada data jadwal pasien rawat inap saat ini.*' }, { quoted: msg });
@@ -381,7 +442,7 @@ async function connectToWhatsApp() {
 
                         replyTxt += `*_Data disinkronkan otomatis dari Web RSUD Kendari._*`;
                         await sock.sendMessage(sender, { text: replyTxt }, { quoted: msg });
-                    } catch (error) { await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel.*' }, { quoted: msg }); }
+                    } catch (error) { await sock.sendMessage(sender, { text: '❌ *Gagal menghubungkan ke Server API Vercel maupun Google Sheets.*\nPastikan Ekstensi di PC menyala.' }, { quoted: msg }); }
                     break;
                     
                 // ==========================================
