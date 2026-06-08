@@ -140,6 +140,7 @@ async function fetchWithFallback(endpointName, queryParams = "") {
 let lastRanapData = null;
 let lastRajalEndoData = null;
 let lastRajalBMData = null;
+let lastRajalPerioData = null; // UPGRADE: Variabel untuk Periodonsi
 
 function getDifferences(oldList, newList) {
     const makeKey = (p) => `${p.no_rm}_${p.nama_pasien}`;
@@ -199,13 +200,20 @@ async function checkApiUpdates(sock) {
             const dataBM = await fetchWithFallback('RajalBM_AntrianPx', `tanggal=${dateWITA}`);
             const currentBM = dataBM.data || [];
 
-            if (lastRajalEndoData !== null && lastRajalBMData !== null) {
+            // UPGRADE: Deteksi Perio
+            const dataPerio = await fetchWithFallback('RajalPerio_AntrianPx', `tanggal=${dateWITA}`);
+            const currentPerio = dataPerio.data || [];
+
+            if (lastRajalEndoData !== null && lastRajalBMData !== null && lastRajalPerioData !== null) {
                 const diffEndo = getDifferences(lastRajalEndoData, currentEndo);
                 const diffBM = getDifferences(lastRajalBMData, currentBM);
+                const diffPerio = getDifferences(lastRajalPerioData, currentPerio);
+                
                 const hasEndoDiff = diffEndo.added.length > 0 || diffEndo.removed.length > 0;
                 const hasBMDiff = diffBM.added.length > 0 || diffBM.removed.length > 0;
+                const hasPerioDiff = diffPerio.added.length > 0 || diffPerio.removed.length > 0;
 
-                if (hasEndoDiff || hasBMDiff) {
+                if (hasEndoDiff || hasBMDiff || hasPerioDiff) {
                     let msg = `🏥 *AUTO INFO: RAWAT JALAN*\n_Perubahan antrean tanggal ${dateWITA}._\n\n`;
                     if (hasEndoDiff) {
                         msg += `🦷 *Klinik Endodonsi:*\n`;
@@ -219,12 +227,19 @@ async function checkApiUpdates(sock) {
                         if (diffBM.removed.length > 0) msg += ` 🔴 Selesai/Batal: ${diffBM.removed.map(p => p.nama_pasien).join(', ')}\n`;
                         msg += `\n`;
                     }
-                    msg += `📊 *Total Antrean (Hari Ini):* Endo (${currentEndo.length}), BM (${currentBM.length})`;
+                    if (hasPerioDiff) {
+                        msg += `🩺 *Klinik Periodonsi:*\n`;
+                        if (diffPerio.added.length > 0) msg += ` 🟢 Tambah: ${diffPerio.added.map(p => p.nama_pasien).join(', ')}\n`;
+                        if (diffPerio.removed.length > 0) msg += ` 🔴 Selesai/Batal: ${diffPerio.removed.map(p => p.nama_pasien).join(', ')}\n`;
+                        msg += `\n`;
+                    }
+                    msg += `📊 *Total Antrean:* Endo (${currentEndo.length}), BM (${currentBM.length}), Perio (${currentPerio.length})`;
                     for (const jid of botSettings.autoRajal) await sock.sendMessage(jid, { text: msg });
                 }
             }
             lastRajalEndoData = currentEndo;
             lastRajalBMData = currentBM;
+            lastRajalPerioData = currentPerio;
         }
     } catch (e) { }
 }
@@ -299,19 +314,23 @@ async function connectToWhatsApp() {
                 await sock.sendMessage(sender, { text: `⏳ _Sedang mengambil data rawat jalan dari server..._` }, { quoted: msg });
                 try {
                     const isEndo = command.includes('endo'); 
+                    const isPerio = command.includes('perio'); // UPGRADE
                     const isRiwayat = command.includes('riwayat');
                     const isAntrian = command.includes('antrianpx'); 
                     const isBesok = command.endsWith('bsk');
 
                     // Tentukan Endpoint API yang sesuai
                     let endpointName = '';
-                    if (isEndo && isAntrian) endpointName = 'RajalEndo_AntrianPx';
-                    else if (isEndo && isRiwayat) endpointName = 'RajalEndo_RiwayatAntrianPx';
-                    else if (!isEndo && isAntrian) endpointName = 'RajalBM_AntrianPx';
-                    else if (!isEndo && isRiwayat) endpointName = 'RajalBM_RiwayatAntrianPx';
-                    else endpointName = isEndo ? 'RajalEndo_AntrianPx' : 'RajalBM_AntrianPx';
+                    let baseEndpoint = '';
 
-                    const namaPoli = isEndo ? 'ENDODONSI' : 'BEDAH MULUT';
+                    if (isEndo) baseEndpoint = 'RajalEndo';
+                    else if (isPerio) baseEndpoint = 'RajalPerio'; // UPGRADE
+                    else baseEndpoint = 'RajalBM';
+
+                    if (isRiwayat) endpointName = `${baseEndpoint}_RiwayatAntrianPx`;
+                    else endpointName = `${baseEndpoint}_AntrianPx`;
+
+                    const namaPoli = isEndo ? 'ENDODONSI' : (isPerio ? 'PERIODONSI' : 'BEDAH MULUT');
                     const namaJenis = isRiwayat ? 'Riwayat Antrian' : 'Antrian Pasien';
                     
                     let targetDate = new Date(); 
@@ -357,14 +376,18 @@ async function connectToWhatsApp() {
                                      `* !jadwalranap* - Cek pasien Rawat Inap\n\n` +
                                      `*(HARI INI)*\n` +
                                      `* !cekrajalriwayatendo*\n` +
-                                     `* !cekrajalrantrianpxendo*\n` +
+                                     `* !cekrajalantrianpxendo*\n` +
                                      `* !cekrajalriwayatbm*\n` +
-                                     `* !cekrajalrantrianpxbm*\n\n` +
+                                     `* !cekrajalantrianpxbm*\n` +
+                                     `* !cekrajalriwayatperio* (NEW)\n` +
+                                     `* !cekrajalantrianpxperio* (NEW)\n\n` +
                                      `*(BESOK)*\n` +
                                      `* !cekrajalriwayatendobsk*\n` +
-                                     `* !cekrajalrantrianpxendobsk*\n` +
+                                     `* !cekrajalantrianpxendobsk*\n` +
                                      `* !cekrajalriwayatbmbsk*\n` +
-                                     `* !cekrajalrantrianpxbmbsk*\n\n` +
+                                     `* !cekrajalantrianpxbmbsk*\n` +
+                                     `* !cekrajalriwayatperiobsk* (NEW)\n` +
+                                     `* !cekrajalantrianpxperiobsk* (NEW)\n\n` +
                                      `*🔔 AUTO INFO (GROUP/CHAT):*\n` +
                                      `* !autoranap on/off* - Notif Otomatis Ranap\n` +
                                      `* !autorajal on/off* - Notif Otomatis Rajal\n\n` +
@@ -397,7 +420,7 @@ async function connectToWhatsApp() {
                     if (args[0] === 'on') {
                         if (!botSettings.autoRajal.includes(sender)) botSettings.autoRajal.push(sender);
                         saveSettings();
-                        await sock.sendMessage(sender, { text: '✅ *Auto Info Rawat Jalan AKTIF* di obrolan ini.\nBot akan otomatis mengirim laporan ke obrolan ini setiap kali antrean Endo/BM bertambah atau berkurang pada hari ini.' }, { quoted: msg });
+                        await sock.sendMessage(sender, { text: '✅ *Auto Info Rawat Jalan AKTIF* di obrolan ini.\nBot akan otomatis mengirim laporan ke obrolan ini setiap kali antrean Endo, BM, atau Perio bertambah atau berkurang pada hari ini.' }, { quoted: msg });
                     } else if (args[0] === 'off') {
                         botSettings.autoRajal = botSettings.autoRajal.filter(jid => jid !== sender);
                         saveSettings();
